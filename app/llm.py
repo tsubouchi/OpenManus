@@ -1,4 +1,4 @@
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union, Any
 import os
 import json
 import aiohttp
@@ -15,7 +15,8 @@ from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 from app.config import LLMSettings, config
 from app.logger import logger  # Assuming a logger is set up in your app
-from app.schema import Message
+from app.schema import Message, AIProvider
+from app.exceptions import ContextWindowExceededError
 
 
 class LLM:
@@ -39,7 +40,12 @@ class LLM:
         # 環境変数から設定を読み込み
         self.api_key = os.getenv("OPENAI_API_KEY", "")
         self.api_url = os.getenv("OPENAI_API_URL", "https://api.openai.com")
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4-turbo")
+        self.model = os.getenv("OPENAI_MODEL", "o3-mini-2025-01-31")
+        self.endpoint = os.getenv("OPENAI_ENDPOINT", "v1/chat/completions")
+        
+        # コンテキストウィンドウサイズを取得
+        self.max_context_tokens = int(os.getenv("OPENAI_MAX_CONTEXT_TOKENS", "200000"))
+        self.max_output_tokens = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "4096"))
         
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY環境変数が設定されていません")
@@ -49,7 +55,7 @@ class LLM:
     @staticmethod
     def format_messages(messages: List[Union[dict, Message]]) -> List[Dict]:
         """
-        メッセージをOpenAI API形式に変換します
+        メッセージをLLM API形式に変換します
         """
         formatted_messages = []
         
@@ -81,7 +87,7 @@ class LLM:
         temperature: Optional[float] = None,
     ) -> str:
         """
-        LLMにリクエストを送信し、レスポンスを取得します
+        LLM APIにリクエストを送信し、レスポンスを取得します
         """
         try:
             # メッセージの準備
@@ -105,13 +111,14 @@ class LLM:
             # ユーザーおよびアシスタントメッセージを追加
             formatted_messages.extend(self.format_messages(messages))
             
-            # エラー時にリトライを行うため、この時点でトークン数チェックを実施
+            # トークン数をチェック
             self.check_token_limit(formatted_messages)
                 
             # ペイロード構築
             payload = {
                 "model": self.model,
                 "messages": formatted_messages,
+                "max_tokens": self.max_output_tokens,
                 "temperature": 0.0 if temperature is None else temperature,
                 "stream": stream
             }
@@ -119,7 +126,7 @@ class LLM:
             # リクエスト送信
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{self.api_url}/v1/chat/completions",
+                    f"{self.api_url}/{self.endpoint}",
                     json=payload,
                     headers={
                         "Content-Type": "application/json", 
@@ -128,7 +135,7 @@ class LLM:
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        logger.error(f"OpenAI API error: {response.status} - {error_text}")
+                        logger.error(f"API error: {response.status} - {error_text}")
                         raise ValueError(f"API request failed with status {response.status}: {error_text}")
                     
                     if stream:
@@ -158,7 +165,7 @@ class LLM:
                         return result["choices"][0]["message"]["content"]
                     
         except Exception as e:
-            logger.error(f"Error in OpenAI API request: {str(e)}")
+            logger.error(f"Error in API request: {str(e)}")
             raise
             
     async def ask_tool(
@@ -169,7 +176,9 @@ class LLM:
         tool_choice: str = "auto",
         **kwargs,
     ):
-        """ツール呼び出し対応のリクエストを実行します"""
+        """
+        ツール呼び出し対応のリクエストを実行します。
+        """
         try:
             # メッセージの準備
             formatted_messages = []
@@ -192,13 +201,14 @@ class LLM:
             # ユーザーおよびアシスタントメッセージを追加
             formatted_messages.extend(self.format_messages(messages))
             
-            # エラー時にリトライを行うため、この時点でトークン数チェックを実施
+            # トークン数をチェック
             self.check_token_limit(formatted_messages)
                 
             # ペイロード構築
             payload = {
                 "model": self.model,
                 "messages": formatted_messages,
+                "max_tokens": self.max_output_tokens,
                 "temperature": 0.0
             }
             
@@ -210,7 +220,7 @@ class LLM:
             # リクエスト送信
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{self.api_url}/v1/chat/completions",
+                    f"{self.api_url}/{self.endpoint}",
                     json=payload,
                     headers={
                         "Content-Type": "application/json", 
@@ -219,7 +229,7 @@ class LLM:
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        logger.error(f"OpenAI API error: {response.status} - {error_text}")
+                        logger.error(f"API error: {response.status} - {error_text}")
                         raise ValueError(f"API request failed with status {response.status}: {error_text}")
                     
                     # レスポンスの解析
@@ -237,7 +247,7 @@ class LLM:
                     return response
                     
         except Exception as e:
-            logger.error(f"Error in OpenAI tool API request: {str(e)}")
+            logger.error(f"Error in tool API request: {str(e)}")
             raise
             
     def check_token_limit(self, messages: List[Dict]) -> bool:
@@ -247,7 +257,7 @@ class LLM:
         """
         from app.token_counter import TokenCounter
         
-        # プロバイダ名を取得（この基底クラスではopenai）
+        # プロバイダ名を取得
         provider = "openai"
         
         # トークン数を計算
@@ -257,9 +267,10 @@ class LLM:
             logger.warning(
                 f"トークン数が制限を超えています: {result['total_tokens']} > {result['max_tokens']}"
             )
-            raise ValueError(
-                f"メッセージのトークン数 ({result['total_tokens']}) がモデルの制限 ({result['max_tokens']}) を超えています。"
-                f"会話を新しいスレッドで開始するか、古いメッセージを削除してください。"
+            raise ContextWindowExceededError(
+                f"メッセージのトークン数がモデルの制限を超えています。会話を新しいスレッドで開始するか、古いメッセージを削除してください。",
+                total_tokens=result['total_tokens'],
+                max_tokens=result['max_tokens']
             )
         
         return True

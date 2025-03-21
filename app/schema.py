@@ -224,9 +224,11 @@ class ConversationManager(BaseModel):
     threads: Dict[str, ConversationThread] = Field(default_factory=dict)
     current_thread_id: Optional[str] = None
     
-    def create_thread(self, provider: Optional[AIProvider] = None) -> ConversationThread:
+    def create_thread(self, provider: Optional[AIProvider] = None, title: Optional[str] = None) -> ConversationThread:
         """新しいスレッドを作成"""
         thread = ConversationThread(provider=provider)
+        if title:
+            thread.title = title
         self.threads[thread.id] = thread
         self.current_thread_id = thread.id
         return thread
@@ -258,3 +260,64 @@ class ConversationManager(BaseModel):
             del self.threads[thread_id]
             return True
         return False
+        
+    def list_threads(self) -> List[Dict[str, Union[str, datetime]]]:
+        """全スレッドの情報をリスト形式で取得"""
+        return [
+            {
+                "id": thread.id,
+                "title": thread.title,
+                "created_at": thread.created_at,
+                "updated_at": thread.updated_at,
+                "provider": thread.provider.value if thread.provider else None,
+                "message_count": len(thread.memory.messages)
+            }
+            for thread in self.threads.values()
+        ]
+    
+    def rename_thread(self, thread_id: str, new_title: str) -> bool:
+        """スレッドの名前を変更"""
+        thread = self.get_thread(thread_id)
+        if thread:
+            thread.title = new_title
+            thread.updated_at = datetime.now()
+            return True
+        return False
+    
+    def clear_thread(self, thread_id: str) -> bool:
+        """スレッドの会話履歴をクリア"""
+        thread = self.get_thread(thread_id)
+        if thread:
+            thread.memory.clear()
+            thread.updated_at = datetime.now()
+            return True
+        return False
+    
+    def ensure_current_thread(self) -> ConversationThread:
+        """現在のスレッドを取得、なければ作成"""
+        current = self.get_current_thread()
+        if not current:
+            return self.create_thread()
+        return current
+    
+    def get_thread_context_info(self, thread_id: Optional[str] = None) -> Dict:
+        """スレッドのコンテキスト情報を取得"""
+        thread = self.get_thread(thread_id)
+        if not thread:
+            return {
+                "exists": False,
+                "message_count": 0,
+                "is_within_limit": True,
+                "total_tokens": 0,
+                "max_tokens": 0
+            }
+        
+        context_info = thread.check_context_limit()
+        return {
+            "exists": True,
+            "message_count": len(thread.memory.messages),
+            "is_within_limit": context_info["is_within_limit"],
+            "total_tokens": context_info["total_tokens"],
+            "max_tokens": context_info["max_tokens"],
+            "usage_percentage": int((context_info["total_tokens"] / context_info["max_tokens"]) * 100) if context_info["max_tokens"] > 0 else 0
+        }

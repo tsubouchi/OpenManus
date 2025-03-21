@@ -1,6 +1,6 @@
 from pydantic import Field
 import os
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Union
 
 from app.agent.toolcall import ToolCallAgent
 from app.prompt.manus import NEXT_STEP_PROMPT, SYSTEM_PROMPT
@@ -12,9 +12,10 @@ from app.tool.python_execute import PythonExecute
 from app.agent.agent_state import AgentState
 from app.agent.memory import Memory
 from app.agent.agent_module import AgentModule
-from app.agent.conversation_manager import ConversationManager
-from app.agent.ai_provider import AIProvider
-from app.agent.llm_factory import LLMFactory
+from app.schema import AIProvider, ConversationManager, ConversationThread
+from app.model_io import ModelIO
+from app.llm_factory import LLMFactory
+from app.logger import logger
 
 
 class Manus(ToolCallAgent):
@@ -41,152 +42,139 @@ class Manus(ToolCallAgent):
         )
     )
 
-    def __init__(self):
+    def __init__(self, conversation_manager: Optional[ConversationManager] = None):
         super().__init__()
         self.state = AgentState.IDLE
         self.memory = Memory()
         self.module = AgentModule()
-        self.conversation_manager = ConversationManager()
-        self.current_thread = self.conversation_manager.create_thread()
+        
+        # 会話スレッド管理
+        self.conversation_manager = conversation_manager or ConversationManager()
+        self.current_thread = self.conversation_manager.ensure_current_thread()
+        
+        # デフォルトのAIプロバイダー
+        self.default_provider = AIProvider(os.getenv("AI_PROVIDER", "openai").lower())
+        
+        # スレッドのプロバイダーが設定されていない場合は設定
+        if self.current_thread and not self.current_thread.provider:
+            self.current_thread.provider = self.default_provider
 
     async def start(self):
-        """Start the agent"""
-        logger.info("Starting Manus agent...")
+        """エージェントを起動"""
         self.state = AgentState.RUNNING
+        return "Agent started"
 
     async def stop(self):
-        """Stop the agent"""
-        logger.info("Stopping Manus agent...")
+        """エージェントを停止"""
         self.state = AgentState.IDLE
+        return "Agent stopped"
 
-    async def ask(self, query: str) -> str:
+    async def run(self, query: str) -> str:
         """
-        Ask the agent a question and get a response
+        ユーザーからのクエリを受け取り、現在のスレッドで処理
         """
-        raise NotImplementedError("Subclasses must implement this method")
+        return await self.process_with_current_thread(query)
 
     async def process_with_current_thread(self, query: str) -> str:
         """
-        現在のスレッドを使用してクエリを処理します
+        現在の会話スレッドを使用してクエリを処理
         """
-        if not self.current_thread:
-            self.current_thread = self.conversation_manager.create_thread()
-            
-        # AIプロバイダーの取得
-        provider = os.getenv("AI_PROVIDER", "openai")
-        ai_provider = None
         try:
-            ai_provider = AIProvider(provider.lower())
-        except ValueError:
-            logger.warning(f"Invalid AI provider: {provider}, using default")
-            ai_provider = AIProvider.OPENAI
+            # 現在のスレッドを取得（なければ作成）
+            current_thread = self.conversation_manager.ensure_current_thread()
+            if not current_thread.provider:
+                current_thread.provider = self.default_provider
             
-        # プロバイダーをスレッドに設定
-        self.current_thread.provider = ai_provider
+            # ユーザークエリをスレッドに追加
+            current_thread.add_user_message(query)
             
-        # LLMファクトリーからLLMインスタンスを取得
-        llm = LLMFactory.get_llm()
+            # コンテキスト制限をチェック
+            context_info = current_thread.check_context_limit()
+            if not context_info["is_within_limit"]:
+                warning_message = (
+                    f"⚠️ コンテキストウィンドウの制限（{context_info['max_tokens']}トークン）を超えています。"
+                    f"現在のトークン数: {context_info['total_tokens']}トークン\n\n"
+                    f"会話を新しいスレッドで開始することをお勧めします。"
+                )
+                current_thread.add_assistant_message(warning_message)
+                return warning_message
+            
+            # システムプロンプト取得
+            system_prompt = self.get_system_prompt()
+            
+            # AI応答を生成
+            response = await ModelIO.process_conversation_thread(
+                thread=current_thread,
+                query=query,
+                system_prompt=system_prompt,
+                provider=current_thread.provider,
+                stream=False,
+                temperature=0.7
+            )
+            
+            return response
         
-        # スレッドを使用してクエリを処理
-        response = await llm.process_conversation_thread(
-            thread=self.current_thread,
-            user_message=query
+        except Exception as e:
+            error_message = f"エラーが発生しました: {str(e)}"
+            logger.error(error_message)
+            
+            # エラーメッセージをスレッドに追加
+            current_thread = self.conversation_manager.ensure_current_thread()
+            current_thread.add_assistant_message(error_message)
+            
+            return error_message
+
+    def create_new_thread(self, title: Optional[str] = None, provider: Optional[AIProvider] = None) -> str:
+        """
+        新しい会話スレッドを作成
+        """
+        # プロバイダーが指定されていない場合はデフォルトを使用
+        provider = provider or self.default_provider
+        
+        # 新しいスレッドを作成
+        new_thread = self.conversation_manager.create_thread(
+            provider=provider,
+            title=title or "New Conversation"
         )
         
-        return response
+        # 現在のスレッドを更新
+        self.current_thread = new_thread
         
-    def create_new_thread(self) -> str:
-        """
-        新しい会話スレッドを作成します
-        """
-        # AIプロバイダーの取得
-        provider = os.getenv("AI_PROVIDER", "openai")
-        ai_provider = None
-        try:
-            ai_provider = AIProvider(provider.lower())
-        except ValueError:
-            logger.warning(f"Invalid AI provider: {provider}, using default")
-            ai_provider = AIProvider.OPENAI
-            
-        # 新しいスレッドを作成
-        self.current_thread = self.conversation_manager.create_thread(provider=ai_provider)
-        
-        return self.current_thread.id
-        
+        return new_thread.id
+
     def get_thread_context_info(self, thread_id: Optional[str] = None) -> Dict:
         """
-        指定されたスレッド（またはデフォルトで現在のスレッド）のコンテキスト情報を取得します
+        スレッドのコンテキスト情報を取得
         """
-        thread = None
-        if thread_id:
-            thread = self.conversation_manager.get_thread(thread_id)
-        else:
-            thread = self.current_thread
-            
-        if not thread:
-            return {
-                "error": "Thread not found",
-                "thread_id": thread_id
-            }
-            
-        # コンテキスト制限情報を取得
-        context_info = thread.check_context_limit()
-        
-        # スレッド情報を追加
-        return {
-            "thread_id": thread.id,
-            "title": thread.title,
-            "message_count": len(thread.memory.messages),
-            "created_at": thread.created_at.isoformat(),
-            "updated_at": thread.updated_at.isoformat(),
-            "provider": thread.provider.value if thread.provider else None,
-            "is_within_limit": context_info["is_within_limit"],
-            "total_tokens": context_info["total_tokens"],
-            "max_tokens": context_info["max_tokens"],
-            "remaining_tokens": context_info["remaining_tokens"],
-            "token_usage_percent": round(context_info["total_tokens"] / context_info["max_tokens"] * 100, 2)
-        }
-        
-    def get_all_threads_info(self) -> List[Dict]:
+        return self.conversation_manager.get_thread_context_info(thread_id)
+
+    def get_all_threads_info(self) -> List[Dict[str, Union[str, int]]]:
         """
-        すべてのスレッドの基本情報を取得します
+        すべてのスレッド情報を取得
         """
-        result = []
-        for thread_id, thread in self.conversation_manager.threads.items():
-            context_info = thread.check_context_limit()
-            result.append({
-                "thread_id": thread.id,
-                "title": thread.title,
-                "message_count": len(thread.memory.messages),
-                "created_at": thread.created_at.isoformat(),
-                "updated_at": thread.updated_at.isoformat(),
-                "provider": thread.provider.value if thread.provider else None,
-                "is_current": thread_id == self.conversation_manager.current_thread_id,
-                "token_usage_percent": round(context_info["total_tokens"] / context_info["max_tokens"] * 100, 2)
-            })
-        return result
-        
+        return self.conversation_manager.list_threads()
+
     def switch_thread(self, thread_id: str) -> bool:
         """
-        指定されたスレッドに切り替えます
+        指定されたスレッドに切り替え
         """
         if self.conversation_manager.set_current_thread(thread_id):
-            self.current_thread = self.conversation_manager.get_thread(thread_id)
+            self.current_thread = self.conversation_manager.get_current_thread()
             return True
         return False
-        
+
     def delete_thread(self, thread_id: str) -> bool:
         """
-        指定されたスレッドを削除します
+        指定されたスレッドを削除
         """
-        return self.conversation_manager.delete_thread(thread_id)
-        
+        result = self.conversation_manager.delete_thread(thread_id)
+        if result and self.conversation_manager.current_thread_id is None:
+            # 現在のスレッドが削除された場合は新しいスレッドを作成
+            self.create_new_thread()
+        return result
+
     def update_thread_title(self, thread_id: str, title: str) -> bool:
         """
-        指定されたスレッドのタイトルを更新します
+        スレッドのタイトルを更新
         """
-        thread = self.conversation_manager.get_thread(thread_id)
-        if thread:
-            thread.title = title
-            return True
-        return False
+        return self.conversation_manager.rename_thread(thread_id, title)

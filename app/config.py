@@ -1,7 +1,7 @@
 import threading
 import tomllib
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,8 @@ class LLMSettings(BaseModel):
     temperature: float = Field(1.0, description="Sampling temperature")
     api_type: str = Field(..., description="AzureOpenai or Openai")
     api_version: str = Field(..., description="Azure Openai version if AzureOpenai")
+    max_context_tokens: Optional[int] = Field(None, description="最大コンテキストウィンドウサイズ（トークン数）")
+    max_output_tokens: Optional[int] = Field(None, description="最大出力トークン数")
 
 
 class AppConfig(BaseModel):
@@ -80,6 +82,8 @@ class Config:
             "temperature": base_llm.get("temperature", 1.0),
             "api_type": base_llm.get("api_type", ""),
             "api_version": base_llm.get("api_version", ""),
+            "max_context_tokens": base_llm.get("max_context_tokens"),
+            "max_output_tokens": base_llm.get("max_output_tokens"),
         }
 
         config_dict = {
