@@ -15,7 +15,7 @@ from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 from app.config import LLMSettings, config
 from app.logger import logger  # Assuming a logger is set up in your app
-from app.schema import Message, AIProvider
+from app.schema import Message, AIProvider, ConversationThread
 from app.exceptions import ContextWindowExceededError
 
 

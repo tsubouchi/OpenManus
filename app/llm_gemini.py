@@ -2,7 +2,7 @@ import os
 import google.generativeai as genai
 from typing import Any, Dict, List, Optional, Union
 
-from app.schema import Message, Function
+from app.schema import Message, Function, ConversationThread
 from app.logger import logger
 
 

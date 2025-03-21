@@ -3,7 +3,7 @@ import json
 from typing import Dict, List, Optional, Union
 from anthropic import AsyncAnthropic
 
-from app.schema import Message, Function
+from app.schema import Message, Function, ConversationThread
 from app.logger import logger
 
 

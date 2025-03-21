@@ -3,7 +3,7 @@ import json
 from typing import Dict, List, Optional, Union
 from openai import AsyncOpenAI
 
-from app.schema import Message, Function
+from app.schema import Message, Function, ConversationThread
 from app.logger import logger
 
 

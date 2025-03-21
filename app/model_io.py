@@ -1,6 +1,6 @@
 import os
 from typing import List, Optional, Union, Dict, Any
-from app.schema import Message, ModelIORequest, ModelIOResponse, AIProvider, ToolCall
+from app.schema import Message, ModelIORequest, ModelIOResponse, AIProvider, ToolCall, ConversationThread
 from app.llm_factory import LLMFactory
 from app.logger import logger
 

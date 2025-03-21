@@ -2,7 +2,7 @@ import os
 from typing import Dict, List, Optional, Union, Any
 
 from app.logger import logger
-from app.schema import Message, AIProvider
+from app.schema import Message, AIProvider, ConversationThread
 from app.llm_gemini import GeminiLLM
 from app.llm_claude import ClaudeLLM
 from app.llm_openai import OpenAILLM

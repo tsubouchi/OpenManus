@@ -4,7 +4,7 @@ import aiohttp
 from typing import Dict, List, Optional, Union
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
-from app.schema import Message
+from app.schema import Message, ConversationThread
 from app.logger import logger
 
 
