@@ -8,6 +8,7 @@ from app.logger import logger
 from app.prompt.toolcall import NEXT_STEP_PROMPT, SYSTEM_PROMPT
 from app.schema import AgentState, Message, ToolCall
 from app.tool import CreateChatCompletion, Terminate, ToolCollection
+from app.llm_factory import LLMFactory
 
 
 TOOL_CALL_REQUIRED = "Tool calls required but none provided"
@@ -38,8 +39,11 @@ class ToolCallAgent(ReActAgent):
             user_msg = Message.user_message(self.next_step_prompt)
             self.messages += [user_msg]
 
+        # Get LLM from factory based on environment setting
+        llm = LLMFactory.get_llm()
+        
         # Get response with tool options
-        response = await self.llm.ask_tool(
+        response = await llm.ask_tool(
             messages=self.messages,
             system_msgs=[Message.system_message(self.system_prompt)]
             if self.system_prompt

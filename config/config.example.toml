@@ -1,12 +1,55 @@
-# Global LLM configuration
+# Global LLM configuration for OpenAI
 [llm]
-model = "claude-3-5-sonnet"
+model = "o3-mini-2025-01-31"
 base_url = "https://api.openai.com/v1"
-api_key = "sk-..."
+api_key = "YOUR_OPENAI_API_KEY_HERE"
 max_tokens = 4096
 temperature = 0.0
+api_type = "openai"
+api_version = ""
 
-# [llm] #AZURE OPENAI:
+# Gemini configuration
+[llm.gemini]
+model = "gemini-2.0-flash"
+base_url = "https://generativelanguage.googleapis.com/v1beta"
+api_key = "YOUR_GEMINI_API_KEY_HERE"
+max_tokens = 4096
+temperature = 0.0
+api_type = "gemini"
+api_version = ""
+
+# Claude configuration
+[llm.claude]
+model = "claude-3-7-sonnet-20250219"
+base_url = "https://api.anthropic.com"
+api_key = "YOUR_CLAUDE_API_KEY_HERE"
+max_tokens = 4096
+temperature = 0.0
+api_type = "claude"
+api_version = "2023-06-01"
+
+# Groq Llama configuration
+[llm.groq_llama]
+model = "llama-3.3-70b-versatile"
+base_url = "https://api.groq.com/v1"
+api_key = "YOUR_GROQ_API_KEY_HERE"
+max_tokens = 4096
+temperature = 0.6
+top_p = 0.95
+api_type = "groq"
+
+# Groq DeepSeek configuration
+[llm.groq_deepseek]
+model = "deepseek-r1-distill-llama-70b"
+base_url = "https://api.groq.com/v1"
+api_key = "YOUR_GROQ_API_KEY_HERE"
+max_tokens = 4096
+temperature = 0.6
+top_p = 0.95
+api_type = "groq"
+
+# Azure OpenAI configuration example
+# [llm.azure]
 # api_type= 'azure'
 # model = "YOUR_MODEL_NAME" #"gpt-4o-mini"
 # base_url = "{YOUR_AZURE_ENDPOINT.rstrip('/')}/openai/deployments/{AZURE_DEPOLYMENT_ID}"
@@ -15,8 +58,8 @@ temperature = 0.0
 # temperature = 0.0
 # api_version="AZURE API VERSION" #"2024-08-01-preview"
 
-# Optional configuration for specific LLM models
+# Optional configuration for specific tasks that require vision capabilities
 [llm.vision]
 model = "claude-3-5-sonnet"
 base_url = "https://api.openai.com/v1"
-api_key = "sk-..."
+api_key = "YOUR_OPENAI_API_KEY_HERE"

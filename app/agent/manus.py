@@ -9,10 +9,7 @@ from app.tool.browser_use_tool import BrowserUseTool
 from app.tool.file_saver import FileSaver
 from app.tool.google_search import GoogleSearch
 from app.tool.python_execute import PythonExecute
-from app.agent.agent_state import AgentState
-from app.agent.memory import Memory
-from app.agent.agent_module import AgentModule
-from app.schema import AIProvider, ConversationManager, ConversationThread
+from app.schema import AIProvider, ConversationManager, ConversationThread, Memory, AgentState
 from app.model_io import ModelIO
 from app.llm_factory import LLMFactory
 from app.logger import logger
@@ -45,8 +42,6 @@ class Manus(ToolCallAgent):
     def __init__(self, conversation_manager: Optional[ConversationManager] = None):
         super().__init__()
         self.state = AgentState.IDLE
-        self.memory = Memory()
-        self.module = AgentModule()
         
         # 会話スレッド管理
         self.conversation_manager = conversation_manager or ConversationManager()
