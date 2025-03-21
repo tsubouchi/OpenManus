@@ -1,4 +1,7 @@
 from typing import Dict, List, Literal, Optional, Union
+import os
+import json
+import aiohttp
 
 from openai import (
     APIError,
@@ -16,87 +19,56 @@ from app.schema import Message
 
 
 class LLM:
-    _instances: Dict[str, "LLM"] = {}
-
-    def __new__(
-        cls, config_name: str = "default", llm_config: Optional[LLMSettings] = None
-    ):
-        if config_name not in cls._instances:
-            instance = super().__new__(cls)
-            instance.__init__(config_name, llm_config)
-            cls._instances[config_name] = instance
-        return cls._instances[config_name]
-
-    def __init__(
-        self, config_name: str = "default", llm_config: Optional[LLMSettings] = None
-    ):
-        if not hasattr(self, "client"):  # Only initialize if not already initialized
-            llm_config = llm_config or config.llm
-            llm_config = llm_config.get(config_name, llm_config["default"])
-            self.model = llm_config.model
-            self.max_tokens = llm_config.max_tokens
-            self.temperature = llm_config.temperature
-            self.api_type = llm_config.api_type
-            self.api_key = llm_config.api_key
-            self.api_version = llm_config.api_version
-            self.base_url = llm_config.base_url
-            if self.api_type == "azure":
-                self.client = AsyncAzureOpenAI(
-                    base_url=self.base_url,
-                    api_key=self.api_key,
-                    api_version=self.api_version,
-                )
-            else:
-                self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
-
+    """
+    LLMの共通インタフェースを定義する基底クラス
+    特定のLLMサービスごとに実装を行うためのテンプレート
+    デフォルトではOpenAIのAPIを使用
+    """
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if self._initialized:
+            return
+            
+        # 環境変数から設定を読み込み
+        self.api_key = os.getenv("OPENAI_API_KEY", "")
+        self.api_url = os.getenv("OPENAI_API_URL", "https://api.openai.com")
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4-turbo")
+        
+        if not self.api_key:
+            raise ValueError("OPENAI_API_KEY環境変数が設定されていません")
+        
+        self._initialized = True
+    
     @staticmethod
-    def format_messages(messages: List[Union[dict, Message]]) -> List[dict]:
+    def format_messages(messages: List[Union[dict, Message]]) -> List[Dict]:
         """
-        Format messages for LLM by converting them to OpenAI message format.
-
-        Args:
-            messages: List of messages that can be either dict or Message objects
-
-        Returns:
-            List[dict]: List of formatted messages in OpenAI format
-
-        Raises:
-            ValueError: If messages are invalid or missing required fields
-            TypeError: If unsupported message types are provided
-
-        Examples:
-            >>> msgs = [
-            ...     Message.system_message("You are a helpful assistant"),
-            ...     {"role": "user", "content": "Hello"},
-            ...     Message.user_message("How are you?")
-            ... ]
-            >>> formatted = LLM.format_messages(msgs)
+        メッセージをOpenAI API形式に変換します
         """
         formatted_messages = []
-
+        
         for message in messages:
             if isinstance(message, dict):
-                # If message is already a dict, ensure it has required fields
-                if "role" not in message:
-                    raise ValueError("Message dict must contain 'role' field")
-                formatted_messages.append(message)
+                formatted_messages.append({
+                    "role": message.get("role", "user"),
+                    "content": message.get("content", "")
+                })
             elif isinstance(message, Message):
-                # If message is a Message object, convert it to dict
-                formatted_messages.append(message.to_dict())
+                formatted_messages.append({
+                    "role": message.role,
+                    "content": message.content
+                })
             else:
                 raise TypeError(f"Unsupported message type: {type(message)}")
-
-        # Validate all messages have required fields
-        for msg in formatted_messages:
-            if msg["role"] not in ["system", "user", "assistant", "tool"]:
-                raise ValueError(f"Invalid role: {msg['role']}")
-            if "content" not in msg and "tool_calls" not in msg:
-                raise ValueError(
-                    "Message must contain either 'content' or 'tool_calls'"
-                )
-
+                
         return formatted_messages
-
+        
     @retry(
         wait=wait_random_exponential(min=1, max=60),
         stop=stop_after_attempt(6),
@@ -105,160 +77,234 @@ class LLM:
         self,
         messages: List[Union[dict, Message]],
         system_msgs: Optional[List[Union[dict, Message]]] = None,
-        stream: bool = True,
+        stream: bool = False,
         temperature: Optional[float] = None,
     ) -> str:
         """
-        Send a prompt to the LLM and get the response.
-
-        Args:
-            messages: List of conversation messages
-            system_msgs: Optional system messages to prepend
-            stream (bool): Whether to stream the response
-            temperature (float): Sampling temperature for the response
-
-        Returns:
-            str: The generated response
-
-        Raises:
-            ValueError: If messages are invalid or response is empty
-            OpenAIError: If API call fails after retries
-            Exception: For unexpected errors
+        LLMにリクエストを送信し、レスポンスを取得します
         """
         try:
-            # Format system and user messages
-            if system_msgs:
-                system_msgs = self.format_messages(system_msgs)
-                messages = system_msgs + self.format_messages(messages)
-            else:
-                messages = self.format_messages(messages)
-
-            if not stream:
-                # Non-streaming request
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    max_tokens=self.max_tokens,
-                    temperature=temperature or self.temperature,
-                    stream=False,
-                )
-                if not response.choices or not response.choices[0].message.content:
-                    raise ValueError("Empty or invalid response from LLM")
-                return response.choices[0].message.content
-
-            # Streaming request
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=self.max_tokens,
-                temperature=temperature or self.temperature,
-                stream=True,
-            )
-
-            collected_messages = []
-            async for chunk in response:
-                chunk_message = chunk.choices[0].delta.content or ""
-                collected_messages.append(chunk_message)
-                print(chunk_message, end="", flush=True)
-
-            print()  # Newline after streaming
-            full_response = "".join(collected_messages).strip()
-            if not full_response:
-                raise ValueError("Empty response from streaming LLM")
-            return full_response
-
-        except ValueError as ve:
-            logger.error(f"Validation error: {ve}")
-            raise
-        except OpenAIError as oe:
-            logger.error(f"OpenAI API error: {oe}")
-            raise
+            # メッセージの準備
+            formatted_messages = []
+            
+            # システムメッセージが提供されている場合、最初に追加
+            if system_msgs and len(system_msgs) > 0:
+                for sys_msg in system_msgs:
+                    if isinstance(sys_msg, dict):
+                        formatted_messages.append({
+                            "role": "system",
+                            "content": sys_msg.get("content", "")
+                        })
+                    elif isinstance(sys_msg, Message):
+                        if sys_msg.role == "system":
+                            formatted_messages.append({
+                                "role": "system",
+                                "content": sys_msg.content
+                            })
+            
+            # ユーザーおよびアシスタントメッセージを追加
+            formatted_messages.extend(self.format_messages(messages))
+            
+            # エラー時にリトライを行うため、この時点でトークン数チェックを実施
+            self.check_token_limit(formatted_messages)
+                
+            # ペイロード構築
+            payload = {
+                "model": self.model,
+                "messages": formatted_messages,
+                "temperature": 0.0 if temperature is None else temperature,
+                "stream": stream
+            }
+            
+            # リクエスト送信
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.api_url}/v1/chat/completions",
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json", 
+                        "Authorization": f"Bearer {self.api_key}"
+                    }
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"OpenAI API error: {response.status} - {error_text}")
+                        raise ValueError(f"API request failed with status {response.status}: {error_text}")
+                    
+                    if stream:
+                        # ストリーミングレスポンスの処理
+                        collected_content = []
+                        async for line in response.content:
+                            if line:
+                                line_text = line.decode("utf-8").strip()
+                                if line_text.startswith("data: "):
+                                    data = line_text[6:]
+                                    if data != "[DONE]":
+                                        try:
+                                            chunk = json.loads(data)
+                                            delta = chunk["choices"][0]["delta"]
+                                            if "content" in delta:
+                                                content = delta["content"]
+                                                collected_content.append(content)
+                                                print(content, end="", flush=True)
+                                        except json.JSONDecodeError:
+                                            pass
+                        
+                        print()  # 最後に改行
+                        return "".join(collected_content)
+                    else:
+                        # 通常レスポンスの処理
+                        result = await response.json()
+                        return result["choices"][0]["message"]["content"]
+                    
         except Exception as e:
-            logger.error(f"Unexpected error in ask: {e}")
+            logger.error(f"Error in OpenAI API request: {str(e)}")
             raise
-
-    @retry(
-        wait=wait_random_exponential(min=1, max=60),
-        stop=stop_after_attempt(6),
-    )
+            
     async def ask_tool(
         self,
         messages: List[Union[dict, Message]],
         system_msgs: Optional[List[Union[dict, Message]]] = None,
-        timeout: int = 60,
         tools: Optional[List[dict]] = None,
-        tool_choice: Literal["none", "auto", "required"] = "auto",
-        temperature: Optional[float] = None,
+        tool_choice: str = "auto",
         **kwargs,
     ):
-        """
-        Ask LLM using functions/tools and return the response.
-
-        Args:
-            messages: List of conversation messages
-            system_msgs: Optional system messages to prepend
-            timeout: Request timeout in seconds
-            tools: List of tools to use
-            tool_choice: Tool choice strategy
-            temperature: Sampling temperature for the response
-            **kwargs: Additional completion arguments
-
-        Returns:
-            ChatCompletionMessage: The model's response
-
-        Raises:
-            ValueError: If tools, tool_choice, or messages are invalid
-            OpenAIError: If API call fails after retries
-            Exception: For unexpected errors
-        """
+        """ツール呼び出し対応のリクエストを実行します"""
         try:
-            # Validate tool_choice
-            if tool_choice not in ["none", "auto", "required"]:
-                raise ValueError(f"Invalid tool_choice: {tool_choice}")
-
-            # Format messages
-            if system_msgs:
-                system_msgs = self.format_messages(system_msgs)
-                messages = system_msgs + self.format_messages(messages)
-            else:
-                messages = self.format_messages(messages)
-
-            # Validate tools if provided
+            # メッセージの準備
+            formatted_messages = []
+            
+            # システムメッセージが提供されている場合、最初に追加
+            if system_msgs and len(system_msgs) > 0:
+                for sys_msg in system_msgs:
+                    if isinstance(sys_msg, dict):
+                        formatted_messages.append({
+                            "role": "system",
+                            "content": sys_msg.get("content", "")
+                        })
+                    elif isinstance(sys_msg, Message):
+                        if sys_msg.role == "system":
+                            formatted_messages.append({
+                                "role": "system",
+                                "content": sys_msg.content
+                            })
+            
+            # ユーザーおよびアシスタントメッセージを追加
+            formatted_messages.extend(self.format_messages(messages))
+            
+            # エラー時にリトライを行うため、この時点でトークン数チェックを実施
+            self.check_token_limit(formatted_messages)
+                
+            # ペイロード構築
+            payload = {
+                "model": self.model,
+                "messages": formatted_messages,
+                "temperature": 0.0
+            }
+            
+            # ツール情報が提供されている場合、ペイロードに追加
             if tools:
-                for tool in tools:
-                    if not isinstance(tool, dict) or "type" not in tool:
-                        raise ValueError("Each tool must be a dict with 'type' field")
-
-            # Set up the completion request
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature or self.temperature,
-                max_tokens=self.max_tokens,
-                tools=tools,
-                tool_choice=tool_choice,
-                timeout=timeout,
-                **kwargs,
-            )
-
-            # Check if response is valid
-            if not response.choices or not response.choices[0].message:
-                print(response)
-                raise ValueError("Invalid or empty response from LLM")
-
-            return response.choices[0].message
-
-        except ValueError as ve:
-            logger.error(f"Validation error in ask_tool: {ve}")
-            raise
-        except OpenAIError as oe:
-            if isinstance(oe, AuthenticationError):
-                logger.error("Authentication failed. Check API key.")
-            elif isinstance(oe, RateLimitError):
-                logger.error("Rate limit exceeded. Consider increasing retry attempts.")
-            elif isinstance(oe, APIError):
-                logger.error(f"API error: {oe}")
-            raise
+                payload["tools"] = tools
+                payload["tool_choice"] = tool_choice
+            
+            # リクエスト送信
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.api_url}/v1/chat/completions",
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json", 
+                        "Authorization": f"Bearer {self.api_key}"
+                    }
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"OpenAI API error: {response.status} - {error_text}")
+                        raise ValueError(f"API request failed with status {response.status}: {error_text}")
+                    
+                    # レスポンスの解析
+                    result = await response.json()
+                    response_message = result["choices"][0]["message"]
+                    content = response_message.get("content", "")
+                    tool_calls = response_message.get("tool_calls", [])
+                    
+                    # ツール呼び出し情報を含むレスポンスオブジェクトを返す
+                    from types import SimpleNamespace
+                    response = SimpleNamespace()
+                    response.content = content
+                    response.tool_calls = tool_calls
+                    
+                    return response
+                    
         except Exception as e:
-            logger.error(f"Unexpected error in ask_tool: {e}")
+            logger.error(f"Error in OpenAI tool API request: {str(e)}")
             raise
+            
+    def check_token_limit(self, messages: List[Dict]) -> bool:
+        """
+        メッセージのトークン数がモデルの制限を超えていないか確認します
+        超えている場合はエラーを発生させます
+        """
+        from app.token_counter import TokenCounter
+        
+        # プロバイダ名を取得（この基底クラスではopenai）
+        provider = "openai"
+        
+        # トークン数を計算
+        result = TokenCounter.check_context_limit(messages, provider)
+        
+        if not result["is_within_limit"]:
+            logger.warning(
+                f"トークン数が制限を超えています: {result['total_tokens']} > {result['max_tokens']}"
+            )
+            raise ValueError(
+                f"メッセージのトークン数 ({result['total_tokens']}) がモデルの制限 ({result['max_tokens']}) を超えています。"
+                f"会話を新しいスレッドで開始するか、古いメッセージを削除してください。"
+            )
+        
+        return True
+        
+    async def process_conversation_thread(
+        self,
+        thread: "ConversationThread",
+        user_message: str,
+        system_msgs: Optional[List[Union[dict, Message]]] = None,
+        stream: bool = False,
+        temperature: Optional[float] = None,
+    ) -> str:
+        """
+        会話スレッドに対してリクエストを処理します
+        """
+        # メッセージをスレッドに追加
+        thread.add_user_message(user_message)
+        
+        # コンテキスト制限をチェック
+        context_info = thread.check_context_limit()
+        if not context_info["is_within_limit"]:
+            # コンテキスト制限を超えている場合、制限に関する情報をレスポンスとしてアシスタントメッセージを追加
+            warning_message = (
+                f"⚠️ コンテキストウィンドウの制限（{context_info['max_tokens']}トークン）を超えています。"
+                f"現在のトークン数: {context_info['total_tokens']}トークン\n\n"
+                f"新しい会話スレッドを開始することをお勧めします。"
+            )
+            thread.add_assistant_message(warning_message)
+            return warning_message
+        
+        try:
+            # AIモデルに問い合わせ
+            response = await self.ask(
+                messages=thread.memory.messages,
+                system_msgs=system_msgs,
+                stream=stream,
+                temperature=temperature
+            )
+            
+            # レスポンスをスレッドに追加
+            thread.add_assistant_message(response)
+            
+            return response
+        except Exception as e:
+            error_message = f"エラーが発生しました: {str(e)}"
+            logger.error(error_message)
+            thread.add_assistant_message(error_message)
+            return error_message

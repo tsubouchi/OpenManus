@@ -4,15 +4,69 @@ English | [简体中文](README_zh.md)
     <a href="https://discord.gg/6dn7Sa3a"><img src="https://dcbadge.vercel.app/api/server/DYn29wFk9z?style=flat" alt="Discord Follow"></a>
 </p>
 
-# OpenManus 🙋
+# OpenManus AI
 
-Manus is incredible, but OpenManus can achieve any ideas without an Invite Code 🛫!
+Versatile AI agent framework with modular capabilities
 
-Our team members [@mannaandpoem](https://github.com/mannaandpoem) [@XiangJinyu](https://github.com/XiangJinyu) [@MoshiQAQ](https://github.com/MoshiQAQ) [@didiforgithub](https://github.com/didiforgithub) from [@MetaGPT](https://github.com/geekan/MetaGPT) built it within 3 hours!
+## 機能一覧
 
-It's a simple implementation, so we welcome any suggestions, contributions, and feedback!
+### 基本機能
+- AI による会話応答
+- ツール使用（ウェブ検索、コード実行など）
+- タスク管理
+- 自己学習と改善
 
-Enjoy your own agent with OpenManus!
+### 高度なエージェント機能
+- ゴールベースの行動計画と実行
+- 複雑なタスクの分割と管理
+- 自己モニタリングとデバッグ
+- マルチエージェント協調
+
+### システム機能
+- 複数の LLM プロバイダ対応（OpenAI, Gemini, Claude, Groq Llama, Groq DeepSeek）
+- モジュラー設計によるプラグイン追加の容易さ
+- 堅牢なエラー処理とリトライメカニズム
+- ステートフルな会話履歴管理
+
+### 会話コンテキスト管理機能
+- 各AIモデルのコンテキストウィンドウサイズに基づくトークン管理
+- 会話スレッドごとのトークン使用量の監視と表示
+- コンテキストウィンドウが上限に近づいた際の警告表示
+- コンテキストウィンドウがいっぱいになった場合の新スレッド提案
+- 複数スレッドの並行管理とスレッド間の切り替え
+- トークン数計測によるモデル制限内での会話管理
+- スレッド単位でのプロバイダー切り替え対応
+
+## 使い方
+
+### 設定
+
+`.env.local` ファイルを作成し、必要な API キーを設定してください。
+
+```
+# API Keys
+OPENAI_API_KEY=your_openai_api_key
+GEMINI_API_KEY=your_gemini_api_key
+CLAUDE_API_KEY=your_claude_api_key
+GROQ_API_KEY=your_groq_api_key
+
+# プロバイダー選択
+AI_PROVIDER=openai  # gemini, claude, groq_llama, groq_deepseek のいずれかを選択
+```
+
+### 起動
+
+```
+python main.py
+```
+
+## コントリビューション
+
+プルリクエストやイシューは歓迎します。大きな変更を加える前には、まずイシューを作成して議論しましょう。
+
+## ライセンス
+
+[MIT](LICENSE)
 
 ## Project Demo
 
